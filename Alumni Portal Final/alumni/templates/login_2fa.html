@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/css/bootstrap.min.css"
+        integrity="sha384-TX8t27EcRE3e/ihU7zmQxVncDAy5uIKz4rEkgIXeMed4M0jlfIDPvg6uqKI2xXr2" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{url_for('static',filename='style.css')}}">
+
+    <title>
+        Authentication Page
+    </title>
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-md navbar-dark bg-dark">
+        <a class="navbar-brand" href="{{url_for('home_page')}}"><span>RIT AlumniPortal</span></a>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            {% if current_user.is_authenticated%}
+
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('feed_page')}}"><img
+                            src="{{url_for('static',filename='download.png')}}" height="15px" width="15px" alt="">
+                        Feed</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('members_page')}}"><img
+                            src="{{url_for('static',filename='icon-members-login.png')}}" height="15px" width="15px"
+                            alt="">Members</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" style="color:white">{{current_user.name}}</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('logout_page')}}"><img
+                            src="{{url_for('static',filename='shut-down-icon-22.jpg')}}" height="15px" width="15px"
+                            alt=""> Logout</a>
+                </li>
+            </ul>
+            {% else%}
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('login')}}"><img
+                            src="https://oferrtest.shaktioffice.in/Content/Login/img/login-w-icon.png" height="15px"
+                            width="15px" alt="" />
+                        Login</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('register_page')}}"><img class="invert"
+                            src="{{url_for('static',filename='PngItem_3204574.png')}}" height="15px" width="15px">
+                        Register</a>
+                </li>
+            </ul>
+            {% endif%}
+        </div>
+    </nav>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="alert alert-{{ category }} container" role="alert">
+        <button type="button" class="close m1-2 mb-1" data-dismiss="alert" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+        {{ message }}
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+    <br><br><br>
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-lg-12">
+                <div class="jumbotron text-center p-4" style="background-color:rgb(127, 191, 207);">
+                    <h2>Two factor authentication</h2>
+                    <h4>Setup and Authenticate 2FA</h4>
+                </div>
+            </div>
+            <div class="col-lg-5">
+                <form>
+                    <div>
+                        <h5>Instructions!</h5>
+                        <ul>
+                            <li>Download <a
+                                    href="https://play.google.com/store/apps/details?id=com.google.android.apps.authenticator2&hl=en&gl=US"
+                                    target="_blank">Google Authenticator</a> on your mobile.</li>
+                            <li>Create a new account with <strong>setup key</strong> method.</li>
+                            <li>Provide the required details (name, secret key).</li>
+                            <li>Select time-based authentication.</li>
+                            <li>Submit the generated key in the form.</li>
+                        </ul>
+                    </div>
+                    <div class="form-group">
+                        <label for="secret">Secret Token</label>
+                        <input type="text" class="form-control" id="secret" value="{{ secret }}" readonly>
+                    </div>
+                    <div class="text-center">
+                        <button type="button" class="btn btn-primary" onclick="copySecret()">Copy Secret</button>
+                    </div>
+                </form>
+            </div>
+            <div class="col-lg-7">
+
+                <form method="POST" action='/login_2fa'>
+                    <div class="form-group">
+                        <label for="otp">Generated OTP</label>
+                        <input type="hidden" name="secret" value="{{ secret }}" required>
+                        <input type="number" class="form-control" id="otp" name="otp" required>
+                    </div>
+                    <div class="text-center">
+                        <button type="submit" class="btn btn-primary">Authenticate User</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function copySecret() {
+            /* Get the text field */
+            var copyText = document.getElementById("secret");
+
+            /* Select the text field */
+            copyText.select();
+            copyText.setSelectionRange(0, 99999); /*For mobile devices*/
+
+            /* Copy the text inside the text field */
+            document.execCommand("copy");
+
+            alert("Successfully copied TOTP secret token!");
+        }
+    </script>
+    <br><br><br>
+
+    <footer class="bg-dark text-center text-lg-start ">
+        <!-- Copyright -->
+        <div class="text-center p-3" style="background-color: rgba(0, 0, 0, 0.2); color:white">
+            © 2021 Copyright:
+            <a class="text-light" href="https://www.raghuinstech.com/">Raghu Institute of Technology</a>
+        </div>
+        <!-- Copyright -->
+    </footer>
+
+    <!-- Optional JavaScript; choose one of the two! -->
+
+    <!-- Option 1: jQuery and Bootstrap Bundle (includes Popper) -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"
+        integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-ho+j7jyWK8fNQe+A12Hb8AhRq26LrZ/JpcUGGOn+Y7RsweNrtN/tE3MoK7ZeZDyx"
+        crossorigin="anonymous"></script>
+
+    <!-- Option 2: jQuery, Popper.js, and Bootstrap JS
+  <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js" integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js" integrity="sha384-9/reFTGAW83EW2RDu2S0VKaIzap3H66lZH81PoYlFhbGU+6BZp6G7niu735Sk7lN" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.min.js" integrity="sha384-w1Q4orYjBQndcko6MimVbzY0tgp4pWB4lZ7lr30WKz0vr/aWKhXdBNmNb5D92v7s" crossorigin="anonymous"></script>
+  -->
+    <!-- <script src="url_for('static',filename='demo.js')"></script> -->
+</body>
+<style>
+    span {
+        font-family: 'Franklin Gothic Medium', 'Arial Narrow', Arial, sans-serif;
+    }
+
+    body {
+        background-color: rgb(240, 238, 238);
+        color: black;
+    }
+
+    .fixed {
+        position: fixed;
+        width: 100%;
+    }
+
+    table,
+    th,
+    td {
+        border: 2px solid grey;
+        border-collapse: collapse;
+    }
+</style>
+
+</html>

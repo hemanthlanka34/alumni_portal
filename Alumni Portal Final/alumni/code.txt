@@ -1,0 +1,2055 @@
+Filename: __init__.py
+
+
+from flask import *
+from flask_bootstrap import Bootstrap
+from flask_bcrypt import Bcrypt
+from flask_login import LoginManager
+
+from flask_sqlalchemy import SQLAlchemy
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///alumni.db'
+# app.config['SECRET_KEY']="753e765accbb7ca359675bad"
+app.config["SECRET_KEY"] = "APP_SECRET_KEY"
+Bootstrap(app)
+bcrypt=Bcrypt(app)
+login_manager=LoginManager(app)
+login_manager.login_view="login"
+login_manager.login_message_category="info"
+db = SQLAlchemy(app)
+import alumni.routes
+    
+
+-------------------------------------------------------------------------------------------------------
+
+Filename: routes.py
+
+from re import I
+import re
+from sqlalchemy import desc
+from alumni import app
+from flask import Flask,render_template,request,flash,redirect,url_for,flash,redirect,session
+from alumni.models import User,Post
+from alumni.forms import RegisterForm,LoginForm,PostForm,Id
+import pyotp
+from alumni import db
+from flask_login import login_user,logout_user,current_user,login_required
+from datetime import datetime
+
+
+@app.route("/")
+@app.route("/home")
+def home_page():
+    return render_template('home.html')
+
+
+@app.route("/about")
+def about_page():
+    # items = Item.query.all()
+    return render_template('about.html')
+    # items=items
+# class RegisterForm(FlaskForm):
+#     name=StringField(label="Full Name:")
+#     email=StringField(label="Email:")
+#     password1=PasswordField(label="Password:")
+#     password2=PasswordField(label="Confirm your password:")
+#     submit=SubmitField(label="Create Account")
+#     dob=DateField(label="Date of Birth:",format='%d-%m-%Y')
+#     address=StringField(label="Residential Address:")
+#     roll_no=StringField(label="Academic Roll Number:")
+#     branch=SelectField(label="Branch:",choices=["Computer Science and Engineering","Electronics and Communication Engineering","Civil Engineering","Electrical and Electronics Engineering","Mechanical Engineering"])
+#     phone_no=StringField(label="Phone Number")
+#     current_job=StringField(label="Working at:")
+
+@app.route("/register",methods=['GET','POST'])
+def register_page():
+    form=RegisterForm()
+    if form.validate_on_submit():
+        user_to_create=User(name=form.name.data, email=form.email.data,password=form.password1.data,dob=form.dob.data,address=form.address.data,roll_no=form.roll_no.data,branch=form.branch.data,phone=form.phone_no.data,current_job=form.current_job.data,secret_key=pyotp.random_base32(),passed_out_year=form.passed_out_year.data)
+        db.session.add(user_to_create)
+        db.session.commit()
+        # login_user(user_to_create)
+        flash(f"Account created successfully! Please enter OTP login as  {user_to_create.name}. ",category="success")
+        session['email'] = user_to_create.email
+        return redirect(url_for('login_2fa'))
+    if form.errors!={}:
+        for err_msg in form.errors.values():
+            flash(f'There was an error with creating a user: {err_msg}',category='danger')
+    return render_template('register.html',form=form)
+
+@app.route("/login",methods=["GET","POST"])
+def login():
+    form=LoginForm()
+    if form.validate_on_submit():
+        attempted_user=User.query.filter_by(email=form.email.data).first()
+        if attempted_user and attempted_user.check_password_correction(attempted_password=form.password.data):
+            # login_user(attempted_user)
+            email=form.email.data
+            session['email']=email
+            flash(f'Please enter otp to login as:{attempted_user.name}',category='success')
+            return redirect(url_for('login_2fa'))
+        else:
+            flash(f'Wrong credentials! Please try again',category='danger')
+    return render_template('login.html',form=form)
+
+# @app.route("/auth", methods=["GET", "POST"])
+# def login_form():
+#     # demo creds
+#     creds = {"username": "test", "password": "password"}
+
+#     if request.args["name"]=="test" and request.args["password"]=="password":
+#         return "success"
+#     else:
+#         return "Wrong credentials"
+    
+
+@app.route("/login/2fa",methods=['GET','POST'])
+def login_2fa():
+    if 'email' in session:
+            email=session['email']
+            attempted_user=User.query.filter_by(email=email).first()
+    # generating random secret key for authentication
+    # secret = pyotp.random_base32()
+    secret =attempted_user.secret_key
+    return render_template("login_2fa.html",secret=secret)
+
+@app.route("/login_2fa", methods=["GET", "POST"])
+def login_2fa_form():
+    
+    
+    # getting secret key used by user
+    secret = request.form.get("secret")
+    # getting OTP provided by user
+    otp = request.form.get("otp")
+    
+    # verifying submitted OTP with PyOTP
+    if pyotp.TOTP(secret).verify(otp):
+        # inform users if OTP is valid
+        if 'email' in session:
+            email=session['email']
+            attempted_user=User.query.filter_by(email=email).first()
+        login_user(attempted_user)
+        flash("You are successfully logged in to your account.", category="success")
+        return redirect(url_for("home_page"))
+    else:
+        # inform users if OTP is invalid
+        flash("You have supplied an invalid OTP!", category="danger")
+        return redirect(url_for("login_2fa"))
+
+
+@app.route("/feed",methods=['GET','POST'])
+@login_required
+def feed_page():
+    posts=Post.query.order_by(desc('date_time')).all()
+    form=PostForm()
+    if form.validate_on_submit():
+        post_to_create=Post(name=current_user.name,post=form.post.data,email=current_user.email,user_id=current_user.id)
+        db.session.add(post_to_create)
+        db.session.commit()
+        flash(f'You have successfully uploaded your post.',category='success')
+        return redirect(url_for('feed_page'))
+    return render_template("feed.html",form=form,posts=posts)
+
+@app.route("/members",methods=['GET','POST'])
+@login_required
+def members_page():
+    users=User.query.order_by('name').all()
+    if request.method == 'POST':
+        user_id = request.form.get('user_id')
+        return redirect(url_for('posts_page', user_id=user_id))
+    return render_template("members.html",users=users)
+
+@app.route("/post",methods=['GET','POST'])
+def posts_page():
+    user_id = request.args.get('user_id')
+    # print(date)
+    posts=Post.query.filter_by(user_id=user_id).order_by(desc('date_time')).all()
+    post=User.query.filter_by(id=user_id).first()
+    return render_template("uposts.html",posts=posts,user=post)
+
+
+@app.route("/logout")
+def logout_page():
+    logout_user()
+    flash(f'You have been logged out!',category='info')
+    return redirect(url_for('home_page'))
+
+----------------------------------------------------------------------------------------------------
+
+Filename: forms.py
+
+from flask_wtf import FlaskForm
+from wtforms import StringField,PasswordField,SubmitField,SelectField,TextAreaField
+from wtforms.fields.html5 import DateField
+from wtforms.validators import DataRequired, EqualTo, Length,Email,DataRequired,ValidationError
+from alumni.models import User
+
+class RegisterForm(FlaskForm):
+    def validate_email(self,email_to_check):
+        email=User.query.filter_by(email=email_to_check.data).first()
+        if email:
+            raise ValidationError("Email already exists! Try a different email address.")
+
+    name=StringField(label="Full Name:",validators=[Length(min=3,max=40,message='The name should be between 3 and 40 characters.'),DataRequired()])
+    email=StringField(label="Email:",validators=[Email(message="Please enter a valid email address"),DataRequired()])
+    password1=PasswordField(label="Password:",validators=[Length(min=6,message='The password should be minimum of 6 characters.'),DataRequired()])
+    password2=PasswordField(label="Confirm your password:",validators=[EqualTo('password1',message='Second password should be matched with above password'),DataRequired()])
+    submit=SubmitField(label="Create Account")
+    dob=DateField(label="Date of Birth:")
+    address=StringField(label="Residential Address:",validators=[Length(min=3,max=150),DataRequired()])
+    passed_out_year=StringField(label="Passed Out Year:",validators=[Length(min=4,max=4),DataRequired()])
+    roll_no=StringField(label="Academic Roll Number:",validators=[Length(min=10,max=10,message='Roll Number must be 10 characters long'),DataRequired()])
+    branch=SelectField(label="Branch:",choices=["Computer Science and Engineering","Electronics and Communication Engineering","Civil Engineering","Electrical and Electronics Engineering","Mechanical Engineering"],validators=[DataRequired()])
+    phone_no=StringField(label="Phone Number:",validators=[DataRequired(),Length(min=10,max=10,message="Phone number should be 10 characters long")])
+    current_job=StringField(label="Working at:",validators=[Length(max=40)])
+    
+
+class LoginForm(FlaskForm):
+    email=StringField(label="Email:",validators=[DataRequired(message="Email address is required")])
+    password=PasswordField(label="Password:",validators=[DataRequired(message="Password is required")])
+    submit=SubmitField(label="Login")
+
+
+
+class PostForm(FlaskForm):
+    post=TextAreaField(validators=[DataRequired(),Length(min=1,max=2000)])
+    submit=SubmitField()
+
+class Id(FlaskForm):
+    user_id=StringField(validators=[DataRequired()])
+    submit=SubmitField(label="Posts")
+
+----------------------------------------------------------------------------------------------------------
+
+Filename: models.py
+
+
+from alumni import bcrypt,login_manager
+from alumni import db,login_manager
+from flask_login import UserMixin
+import datetime
+from flask_sqlalchemy import SQLAlchemy
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+class User(db.Model,UserMixin):
+    id = db.Column(db.Integer(), primary_key=True)
+    name = db.Column(db.String(length=30), nullable=False, unique=False)
+    email= db.Column(db.String(length=30), nullable=False, unique=True)
+    password_hash = db.Column(db.String(length=50),nullable=False, unique=False)
+    dob=db.Column(db.Date(),nullable=False)
+    address = db.Column(db.String(length=200),nullable=False)
+    roll_no = db.Column(db.String(length=10),nullable=False)
+    branch = db.Column(db.String(length=40),nullable=False)
+    phone = db.Column(db.String(length=13),nullable=False,unique=True)
+    current_job = db.Column(db.String(length=30),nullable=True)
+    secret_key= db.Column(db.String(length=16),nullable=False,unique=True)
+    # users=db.relationship('Post',backref='owned_user',lazy=True)
+    passed_out_year=db.Column(db.String(length=4),nullable=False,unique=False)
+
+    @property
+    def password(self,plain_text_password):
+        return self.password
+    
+    @password.setter
+    def password(self,plain_text_password):
+        self.password_hash = bcrypt.generate_password_hash(plain_text_password).decode('utf-8')
+    
+    def check_password_correction(self,attempted_password):
+        return bcrypt.check_password_hash(self.password_hash,attempted_password)
+
+
+
+class Post(db.Model):
+    id=db.Column(db.Integer, primary_key=True)
+    name=db.Column(db.String(length=30),nullable=False,unique=False)
+    email=db.Column(db.String(length=40),nullable=False)
+    post = db.Column(db.String(length=10000),nullable=False,unique=False)
+    date_time=db.Column(db.DateTime,nullable=False,default=datetime.datetime.now)
+    user_id=db.Column(db.Integer(),nullable=False)
+    # owner=db.Column(db.String(),db.ForeignKey('User.email'))
+
+---------------------------------------------------------------------------------------------------------
+
+Filename: run.py
+
+from alumni import app
+app.run(debug=True)
+
+---------------------------------------------------------------------------------------------------------
+
+Filename: home.html
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/css/bootstrap.min.css"
+        integrity="sha384-TX8t27EcRE3e/ihU7zmQxVncDAy5uIKz4rEkgIXeMed4M0jlfIDPvg6uqKI2xXr2" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{url_for('static',filename='style.css')}}">
+
+    <title>
+        Home Page
+    </title>
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-md navbar-dark bg-dark">
+        <a class="navbar-brand" href="{{url_for('home_page')}}"><span>RIT AlumniPortal</span></a>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            {% if current_user.is_authenticated%}
+
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('feed_page')}}"><img
+                            src="{{url_for('static',filename='download.png')}}" height="15px" width="15px" alt="">
+                        Feed</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('members_page')}}"><img
+                            src="{{url_for('static',filename='icon-members-login.png')}}" height="15px" width="15px"
+                            alt="">Members</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" style="color:white">{{current_user.name}}</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('logout_page')}}"><img
+                            src="{{url_for('static',filename='shut-down-icon-22.jpg')}}" height="15px" width="15px"
+                            alt=""> Logout</a>
+                </li>
+            </ul>
+            {% else%}
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('login')}}"><img
+                            src="https://oferrtest.shaktioffice.in/Content/Login/img/login-w-icon.png" height="15px"
+                            width="15px" alt="" />
+                        Login</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('register_page')}}"><img class="invert"
+                            src="{{url_for('static',filename='PngItem_3204574.png')}}" height="15px" width="15px">
+                        Register</a>
+                </li>
+            </ul>
+            {% endif%}
+        </div>
+    </nav>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="alert alert-{{ category }} container" role="alert">
+        <button type="button" class="close m1-2 mb-1" data-dismiss="alert" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+        {{ message }}
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+    <br>
+    <!-- <br> -->
+    <div class="container" align="center">
+        <div>
+            <img src="https://media.istockphoto.com/photos/graduation-college-school-degree-successful-concept-picture-id639698498?k=6&m=639698498&s=612x612&w=0&h=99Xiw4HZiSqwPrEaTzBUSP9c3x4T-pknjXNSw4Azwxc="
+                width="100%" height="600px" alt="">
+        </div>
+
+        <h1>Alumni Portal</h1>
+        <p style="font-size:20px" align="left">
+            ALUMNI PORTAL is an institutes assets, where alumni is a
+            Organization of a particular college or university. Its accumulate the
+            details of students and maintains it . To create a connectivity for
+            students to enhance new environments . Across time zones ,decades , and generation our alumni are bonded
+            together to
+            grow old with us. Alumni hands in us to build our self with their experiences and nurture
+            knowledge . It describes how we can stand for each other through an
+            organization to share the assets of the knowledge and old memories of
+            life lessons.
+        </p>
+        <p style="font-size:20px" align="left">
+            Student Alumni portal of raghu educational institutes em-place in
+            endeavor to bring all alumni on one platform to create a group of raghu
+            alumni and to build long lasting relations. Alumni are working towards
+            creating opportunities. So, the main aim to develop this web-based
+            application is that is going to make it possible for the former old and
+            new students of the college to keep in touch with each other and that
+            will substitute the manual system of the alumni office with an
+            automated one. This allows students to know about each other and their
+            current status. With the assistance of this entry graduated class
+            additionally get a different update on current industry patterns, temporary job opportunity, opening for
+            work,
+            supported
+            ventures and a
+            lot more things.
+        </p>
+
+        <h2>Our Motto</h2>
+        <p style="font-size:20px" align="left">
+        <ul align="left">
+            <li style="font-size: 20px;">To establish a connection between the old students and present
+                students</li>
+            <li style="font-size: 20px;"> Provide inspiration and build a healthy community</li>
+            <li style="font-size: 20px;">Raise the standards of the institution</li>
+            <li style="font-size: 20px;">Provide resource materials and guidance to present students</li>
+            <li style="font-size: 20px;">Help in collaborating with the industry</li>
+            <li style="font-size: 20px;">Lay the foundation to discuss national issues and more</li>
+        </ul>
+        </p>
+        <br>
+        <p style="font-size: 20px;" align="left">
+            Our alumni portal is to establish a connection between the old students
+            and present students. It helps in members to collaborate, exchange
+            views, enable communication, control the process and contribute to
+            association’s development. And yet challenge your creativity, skills, explore new things.
+        </p>
+    </div>
+
+    <br><br><br>
+
+    <footer class="bg-dark text-center text-lg-start ">
+        <!-- Copyright -->
+        <div class="text-center p-3" style="background-color: rgba(0, 0, 0, 0.2); color:white">
+            © 2021 Copyright:
+            <a class="text-light" href="https://www.raghuinstech.com/">Raghu Institute of Technology</a>
+        </div>
+        <!-- Copyright -->
+    </footer>
+
+    <!-- Optional JavaScript; choose one of the two! -->
+
+    <!-- Option 1: jQuery and Bootstrap Bundle (includes Popper) -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"
+        integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-ho+j7jyWK8fNQe+A12Hb8AhRq26LrZ/JpcUGGOn+Y7RsweNrtN/tE3MoK7ZeZDyx"
+        crossorigin="anonymous"></script>
+
+    <!-- Option 2: jQuery, Popper.js, and Bootstrap JS
+      <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js" integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj" crossorigin="anonymous"></script>
+      <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js" integrity="sha384-9/reFTGAW83EW2RDu2S0VKaIzap3H66lZH81PoYlFhbGU+6BZp6G7niu735Sk7lN" crossorigin="anonymous"></script>
+      <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.min.js" integrity="sha384-w1Q4orYjBQndcko6MimVbzY0tgp4pWB4lZ7lr30WKz0vr/aWKhXdBNmNb5D92v7s" crossorigin="anonymous"></script>
+      -->
+    <!-- <script src="url_for('static',filename='demo.js')"></script> -->
+</body>
+<style>
+    span {
+        font-family: 'Franklin Gothic Medium', 'Arial Narrow', Arial, sans-serif;
+    }
+
+    body {
+        background-color: rgb(240, 238, 238);
+        color: black;
+    }
+
+    .fixed {
+        position: fixed;
+        width: 100%;
+    }
+
+    table,
+    th,
+    td {
+        border: 2px solid grey;
+        border-collapse: collapse;
+    }
+</style>
+
+</html>
+----------------------------------------------------------------------------------------------------------
+Filename: about.html
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/css/bootstrap.min.css"
+        integrity="sha384-TX8t27EcRE3e/ihU7zmQxVncDAy5uIKz4rEkgIXeMed4M0jlfIDPvg6uqKI2xXr2" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{url_for('static',filename='style.css')}}">
+
+    <title>
+        About Us
+    </title>
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-md navbar-dark bg-dark">
+        <a class="navbar-brand" href="{{url_for('home_page')}}"><span>RIT AlumniPortal</span></a>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            {% if current_user.is_authenticated%}
+
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('feed_page')}}"><img
+                            src="{{url_for('static',filename='download.png')}}" height="15px" width="15px" alt="">
+                        Feed</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('members_page')}}"><img
+                            src="{{url_for('static',filename='icon-members-login.png')}}" height="15px" width="15px"
+                            alt="">Members</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" style="color:white">{{current_user.name}}</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('logout_page')}}"><img
+                            src="{{url_for('static',filename='shut-down-icon-22.jpg')}}" height="15px" width="15px"
+                            alt=""> Logout</a>
+                </li>
+            </ul>
+            {% else%}
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('login')}}"><img
+                            src="https://oferrtest.shaktioffice.in/Content/Login/img/login-w-icon.png" height="15px"
+                            width="15px" alt="" />
+                        Login</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('register_page')}}"><img class="invert"
+                            src="{{url_for('static',filename='PngItem_3204574.png')}}" height="15px" width="15px">
+                        Register</a>
+                </li>
+            </ul>
+            {% endif%}
+        </div>
+    </nav>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="alert alert-{{ category }} container" role="alert">
+        <button type="button" class="close m1-2 mb-1" data-dismiss="alert" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+        {{ message }}
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+
+    <div class="container" align="center" style="margin-bottom:40px">
+        <br>
+        <h1
+            style="font-family:'Lucida Sans', 'Lucida Sans Regular', 'Lucida Grande', 'Lucida Sans Unicode', Geneva, Verdana, sans-serif; font-weight:bold; font-size:60px">
+            Raghu Institute Of Technology</h1>
+        <img src="https://image3.mouthshut.com/images/imagesp/925716570s.jpg" alt="">
+        <h2 style="font-weight: bold; font-size:40px"><u>Profile</u></h2>
+        <p align="left" style="font-size: 20px;">
+            Raghu Institute of Technology (RIT) has been established in 2007 and is situated on the great pasture of 50
+            acres of
+            land and just 25 minutes away from both the RTC complex and Railway station of Visakhapatnam, AP, India. RIT
+            is
+            accredited by NAAC with an ‘A’ grade and accredited by NBA. It ever strives to equip its students with the
+            required
+            conceptual, technical, and managerial skills to grab the emerging opportunities and to meet the
+            ever-increasing
+            demands
+            and requirements of the information technology and manufacturing sectors. The institute determines to
+            produce
+            efficient
+            and impeccable technological professionals to cater to the technology needs of the society and to
+            effectively
+            shoulder
+            the ever-changing business responsibilities at national and international levels.
+
+            Getting a rich number placement every year, RIT actively involves in research-innovative projects in
+            collaboration
+            with
+            industry and R & D departments. RIT has Academia – industry collaborations that help in enhancing the
+            appetite
+            of
+            the
+            students for research. RIT has several MOUs with renowned institutions that help the students get real-time
+            experience
+            to students who ate going to face the industry challenges. Both Academia – industry collaborations and the
+            MOUs
+            encourage improving the quality and quantity of teaching, research, innovations, human resource, and thus
+            the
+            financial
+            sources of the institution. The adequate and well established and equipped labs give ample opportunities to
+            the
+            students
+            for doing experiments. Sports and games and Cultural Activities are integral parts of the institute’s
+            curriculum.
+            The
+            NCC and NSS units communicate the importance of unity and discipline and social services respectively and
+            help
+            in
+            building the inner and outer characters of the students. A huge and hygienic canteen apart from
+            sophisticated
+            A/C
+            hostels on the campus for satisfactorily satiating the hunger and thirst of students.
+        </p>
+        <br>
+        <h2>Our honorable chairman Mr.Raghu Kalidindi Garu</h2>
+        <img src="https://www.raghuenggcollege.com/assets/images/raghusir_1.jpg" green"" alt="">
+        <br>
+        <h2>RAGHU KALIDINDI</h2>
+        <h4>Chairman, Raghu Educational Institutions</h4>
+        <p style="width:50%; font-size :20px;" align="left">We aim to make Raghu Institute of Technology a convenient
+            place
+            for
+            quality
+            education and I am
+            confident that we
+            are on
+            the right track of the ideology. RIT facilitates an atmosphere for the students in which they enjoy the
+            process
+            of
+            learning and training. The amicable ambiance in RIT makes it easier for the student to have a regular
+            rapport
+            with the
+            faculty members which, in turn, enhances the quality of education.</p>
+    </div>
+    <br><br><br>
+
+    <footer class="bg-dark text-center text-lg-start ">
+        <!-- Copyright -->
+        <div class="text-center p-3" style="background-color: rgba(0, 0, 0, 0.2); color:white">
+            © 2021 Copyright:
+            <a class="text-light" href="https://www.raghuinstech.com/">Raghu Institute of Technology</a>
+        </div>
+        <!-- Copyright -->
+    </footer>
+
+    <!-- Optional JavaScript; choose one of the two! -->
+
+    <!-- Option 1: jQuery and Bootstrap Bundle (includes Popper) -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"
+        integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-ho+j7jyWK8fNQe+A12Hb8AhRq26LrZ/JpcUGGOn+Y7RsweNrtN/tE3MoK7ZeZDyx"
+        crossorigin="anonymous"></script>
+
+    <!-- Option 2: jQuery, Popper.js, and Bootstrap JS
+  <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js" integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js" integrity="sha384-9/reFTGAW83EW2RDu2S0VKaIzap3H66lZH81PoYlFhbGU+6BZp6G7niu735Sk7lN" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.min.js" integrity="sha384-w1Q4orYjBQndcko6MimVbzY0tgp4pWB4lZ7lr30WKz0vr/aWKhXdBNmNb5D92v7s" crossorigin="anonymous"></script>
+  -->
+    <!-- <script src="url_for('static',filename='demo.js')"></script> -->
+</body>
+<style>
+    span {
+        font-family: 'Franklin Gothic Medium', 'Arial Narrow', Arial, sans-serif;
+    }
+
+    body {
+        background-color: rgb(240, 238, 238);
+        color: black;
+    }
+
+    .fixed {
+        position: fixed;
+        width: 100%;
+    }
+
+    table,
+    th,
+    td {
+        border: 2px solid grey;
+        border-collapse: collapse;
+    }
+</style>
+
+</html>
+
+-----------------------------------------------------------------------------------------------------
+
+Filename: login.html
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/css/bootstrap.min.css"
+        integrity="sha384-TX8t27EcRE3e/ihU7zmQxVncDAy5uIKz4rEkgIXeMed4M0jlfIDPvg6uqKI2xXr2" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{url_for('static',filename='style.css')}}">
+
+    <title>
+        Login Page
+    </title>
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-md navbar-dark bg-dark">
+        <a class="navbar-brand" href="{{url_for('home_page')}}"><span>RIT AlumniPortal</span></a>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            {% if current_user.is_authenticated%}
+
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('feed_page')}}"><img
+                            src="{{url_for('static',filename='download.png')}}" height="15px" width="15px" alt="">
+                        Feed</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('members_page')}}"><img
+                            src="{{url_for('static',filename='icon-members-login.png')}}" height="15px" width="15px"
+                            alt="">Members</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" style="color:white">{{current_user.name}}</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('logout_page')}}"><img
+                            src="{{url_for('static',filename='shut-down-icon-22.jpg')}}" height="15px" width="15px"
+                            alt=""> Logout</a>
+                </li>
+            </ul>
+            {% else%}
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('login')}}"><img
+                            src="https://oferrtest.shaktioffice.in/Content/Login/img/login-w-icon.png" height="15px"
+                            width="15px" alt="" />
+                        Login</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('register_page')}}"><img class="invert"
+                            src="{{url_for('static',filename='PngItem_3204574.png')}}" height="15px" width="15px">
+                        Register</a>
+                </li>
+            </ul>
+            {% endif%}
+        </div>
+    </nav>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="alert alert-{{ category }} container" role="alert">
+        <button type="button" class="close m1-2 mb-1" data-dismiss="alert" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+        {{ message }}
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+    <br>
+    <div class="container" align="center" margin="500px">
+        <br>
+        <h1>Login Form</h1>
+        <!-- <h2><u>Create your account</u></h2> -->
+        <br>
+        <form class="form-signin register" method="POST" style="color:black; background-color:white">
+            {{form.hidden_tag()}}
+            <img src="https://image3.mouthshut.com/images/imagesp/925716570s.jpg" alt="" height="100px" width="100px">
+            <!-- onsubmit="return calc()" -->
+            <br><br>
+            {{form.email.label()}}
+            {{form.email(class="form-control ",placeholder="Enter your Email")}}
+
+            <br>
+
+            {{form.password.label()}}
+            {{form.password(class="form-control ",placeholder="Enter your password")}}
+
+            <br>
+            <br>
+            {{form.submit(class="form-control btn btn-block btn-primary ",style="width:15%")}}
+            <br>
+            <br>
+            <h6>Don't have an account?
+            </h6>
+            <a class=" btn btn-sm btn-secondary" href=" {{url_for('register_page')}}">Register</a>
+        </form>
+    </div>
+    <br><br><br><br>
+    <p>
+
+    </p>
+    {<br><br><br>
+
+    <footer class="bg-dark text-center text-lg-start ">
+        <!-- Copyright -->
+        <div class="text-center p-3" style="background-color: rgba(0, 0, 0, 0.2); color:white">
+            © 2021 Copyright:
+            <a class="text-light" href="https://www.raghuinstech.com/">Raghu Institute of Technology</a>
+        </div>
+        <!-- Copyright -->
+    </footer>
+
+    <!-- Optional JavaScript; choose one of the two! -->
+
+    <!-- Option 1: jQuery and Bootstrap Bundle (includes Popper) -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"
+        integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-ho+j7jyWK8fNQe+A12Hb8AhRq26LrZ/JpcUGGOn+Y7RsweNrtN/tE3MoK7ZeZDyx"
+        crossorigin="anonymous"></script>
+
+    <!-- Option 2: jQuery, Popper.js, and Bootstrap JS
+      <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js" integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj" crossorigin="anonymous"></script>
+      <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js" integrity="sha384-9/reFTGAW83EW2RDu2S0VKaIzap3H66lZH81PoYlFhbGU+6BZp6G7niu735Sk7lN" crossorigin="anonymous"></script>
+      <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.min.js" integrity="sha384-w1Q4orYjBQndcko6MimVbzY0tgp4pWB4lZ7lr30WKz0vr/aWKhXdBNmNb5D92v7s" crossorigin="anonymous"></script>
+      -->
+    <!-- <script src="url_for('static',filename='demo.js')"></script> -->
+</body>
+<style>
+    span {
+        font-family: 'Franklin Gothic Medium', 'Arial Narrow', Arial, sans-serif;
+    }
+
+    body {
+        background-color: rgb(240, 238, 238);
+        color: black;
+    }
+
+    .fixed {
+        position: fixed;
+        width: 100%;
+    }
+
+    table,
+    th,
+    td {
+        border: 2px solid grey;
+        border-collapse: collapse;
+    }
+</style>
+
+</html>
+
+---------------------------------------------------------------------------------------------------
+
+Filename: register.html
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/css/bootstrap.min.css"
+        integrity="sha384-TX8t27EcRE3e/ihU7zmQxVncDAy5uIKz4rEkgIXeMed4M0jlfIDPvg6uqKI2xXr2" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{url_for('static',filename='style.css')}}">
+
+    <title>
+        Registration Page
+    </title>
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-md navbar-dark bg-dark">
+        <a class="navbar-brand" href="{{url_for('home_page')}}"><span>RIT AlumniPortal</span></a>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            {% if current_user.is_authenticated%}
+
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('feed_page')}}"><img
+                            src="{{url_for('static',filename='download.png')}}" height="15px" width="15px" alt="">
+                        Feed</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('members_page')}}"><img
+                            src="{{url_for('static',filename='icon-members-login.png')}}" height="15px" width="15px"
+                            alt="">Members</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" style="color:white">{{current_user.name}}</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('logout_page')}}"><img
+                            src="{{url_for('static',filename='shut-down-icon-22.jpg')}}" height="15px" width="15px"
+                            alt=""> Logout</a>
+                </li>
+            </ul>
+            {% else%}
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('login')}}"><img
+                            src="https://oferrtest.shaktioffice.in/Content/Login/img/login-w-icon.png" height="15px"
+                            width="15px" alt="" />
+                        Login</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('register_page')}}"><img class="invert"
+                            src="{{url_for('static',filename='PngItem_3204574.png')}}" height="15px" width="15px">
+                        Register</a>
+                </li>
+            </ul>
+            {% endif%}
+        </div>
+    </nav>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="alert alert-{{ category }} container" role="alert">
+        <button type="button" class="close m1-2 mb-1" data-dismiss="alert" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+        {{ message }}
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+    <div class="container" align="center" margin="500px">
+        <br>
+        <h1>Registration Form</h1>
+        <!-- <h2><u>Create your account</u></h2> -->
+        <br>
+        <form class="form-register register" method="POST" style="color:black">
+            <!-- onsubmit="return calc()" -->
+            <h3>Student Information</h3>
+            {{form.hidden_tag()}}
+            {{form.name.label()}}
+            {{form.name(class="form-control ",placeholder="Enter your name",id="username")}}
+
+
+            <br>
+            {{form.branch.label()}}
+            {{form.branch(class="form-control branch", placeholder="Select your branch")}}
+            <br>
+            {{form.roll_no.label()}}
+            {{form.roll_no(class="form-control ",placeholder="Enter your Roll Number")}}
+            <br>
+            {{form.passed_out_year.label()}}
+            {{form.passed_out_year(class="form-control",placeholder="Enter your passed out year")}}
+            <br>
+            {{form.phone_no.label()}}
+            {{form.phone_no(class="form-control",placeholder="Enter your phone number")}}
+            <br>
+            {{form.dob.label()}}
+            {{form.dob(class="form-control ",placeholder="Enter your Date of Birth")}}
+            <!-- <br>
+
+
+        {{form.email.label()}}
+        {{form.email(class="form-control ",placeholder="Enter your Email")}}
+
+        <br>
+
+
+        {{form.password1.label()}}
+        {{form.password1(class="form-control ",placeholder="Enter your password")}}
+
+
+        <br>
+
+
+        {{form.password2.label()}}
+        {{form.password2(class="form-control ",placeholder="Re-enter your password")}} -->
+            <br>
+            {{form.current_job.label()}}
+            {{form.current_job(class="form-control",placeholder="Enter the name of company that you are working")}}
+            <br>
+            {{form.address.label()}}
+            {{form.address(class="form-control address", placeholder="Enter your address")}}
+            <br>
+            <hr style="border-top:3px dotted rgb(134, 132, 132); width: 10%;">
+            <h3>Login Credentials</h3>
+            <br>
+            {{form.email.label()}}
+            {{form.email(class="form-control ",placeholder="Enter your Email")}}
+
+            <br>
+
+
+            {{form.password1.label()}}
+            {{form.password1(class="form-control ",placeholder="Enter your password")}}
+
+
+            <br>
+
+
+            {{form.password2.label()}}
+            {{form.password2(class="form-control ",placeholder="Re-enter your password")}}
+            <br>
+            <br><br>
+            {{form.submit(class="form-control btn btn-block btn-primary",style="width: 15%;")}}
+            <br>
+            <br>
+            <h6>Already have an account?
+            </h6>
+            <a class="btn btn-sm btn-secondary" href="{{url_for('login')}}">Login</a>
+
+        </form>
+
+        <br>
+        <br>
+    </div>
+    <!-- <script src="{{url_for('static',filename='demo.js')}}"></script> -->
+    <br><br><br>
+
+    <footer class="bg-dark text-center text-lg-start ">
+        <!-- Copyright -->
+        <div class="text-center p-3" style="background-color: rgba(0, 0, 0, 0.2); color:white">
+            © 2021 Copyright:
+            <a class="text-light" href="https://www.raghuinstech.com/">Raghu Institute of Technology</a>
+        </div>
+        <!-- Copyright -->
+    </footer>
+
+    <!-- Optional JavaScript; choose one of the two! -->
+
+    <!-- Option 1: jQuery and Bootstrap Bundle (includes Popper) -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"
+        integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-ho+j7jyWK8fNQe+A12Hb8AhRq26LrZ/JpcUGGOn+Y7RsweNrtN/tE3MoK7ZeZDyx"
+        crossorigin="anonymous"></script>
+
+    <!-- Option 2: jQuery, Popper.js, and Bootstrap JS
+  <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js" integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js" integrity="sha384-9/reFTGAW83EW2RDu2S0VKaIzap3H66lZH81PoYlFhbGU+6BZp6G7niu735Sk7lN" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.min.js" integrity="sha384-w1Q4orYjBQndcko6MimVbzY0tgp4pWB4lZ7lr30WKz0vr/aWKhXdBNmNb5D92v7s" crossorigin="anonymous"></script>
+  -->
+    <!-- <script src="url_for('static',filename='demo.js')"></script> -->
+</body>
+<style>
+    span {
+        font-family: 'Franklin Gothic Medium', 'Arial Narrow', Arial, sans-serif;
+    }
+
+    body {
+        background-color: rgb(240, 238, 238);
+        color: black;
+    }
+
+    .fixed {
+        position: fixed;
+        width: 100%;
+    }
+
+    table,
+    th,
+    td {
+        border: 2px solid grey;
+        border-collapse: collapse;
+    }
+</style>
+
+</html>
+---------------------------------------------------------------------------------------------------------
+
+Filename: feed.html
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/css/bootstrap.min.css"
+        integrity="sha384-TX8t27EcRE3e/ihU7zmQxVncDAy5uIKz4rEkgIXeMed4M0jlfIDPvg6uqKI2xXr2" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{url_for('static',filename='style.css')}}">
+
+    <title>
+        Feed Page
+    </title>
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-md navbar-dark bg-dark">
+        <a class="navbar-brand" href="{{url_for('home_page')}}"><span>RIT AlumniPortal</span></a>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            {% if current_user.is_authenticated%}
+
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('feed_page')}}"><img
+                            src="{{url_for('static',filename='download.png')}}" height="15px" width="15px" alt="">
+                        Feed</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('members_page')}}"><img
+                            src="{{url_for('static',filename='icon-members-login.png')}}" height="15px" width="15px"
+                            alt="">Members</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" style="color:white">{{current_user.name}}</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('logout_page')}}"><img
+                            src="{{url_for('static',filename='shut-down-icon-22.jpg')}}" height="15px" width="15px"
+                            alt=""> Logout</a>
+                </li>
+            </ul>
+            {% else%}
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('login')}}"><img
+                            src="https://oferrtest.shaktioffice.in/Content/Login/img/login-w-icon.png" height="15px"
+                            width="15px" alt="" />
+                        Login</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('register_page')}}"><img class="invert"
+                            src="{{url_for('static',filename='PngItem_3204574.png')}}" height="15px" width="15px">
+                        Register</a>
+                </li>
+            </ul>
+            {% endif%}
+        </div>
+    </nav>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="alert alert-{{ category }} container" role="alert">
+        <button type="button" class="close m1-2 mb-1" data-dismiss="alert" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+        {{ message }}
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+    <!-- <h1 class="container" align="center"><b><u>Feed Posts</u></b></h1> -->
+
+    <div class="container" align="center">
+        <!-- <h2><u>Create your account</u></h2> -->
+        <br>
+        <form method="POST" style="color:black;" autocomplete="on">
+            {{form.hidden_tag()}}
+
+            {{form.post(class="form-control ",placeholder="Whats on your mind!",autocomplete="on")}}
+            {{form.submit(class="form-control btn btn-block btn-primary",placeholder='Post',style="width:15%")}}
+    </div>
+    <br><br>
+    {% for post in posts%}
+    <div class="container" style="border:2px solid white; padding:10px; border-radius:5px;background-color:white">
+        <p>Posted by: <b>{{post.name}}</b></p>
+        <p>E-mail: {{post.email}}</p>
+        <hr>
+        <p style="font-size:25px;"> {{post.post}}</p>
+        <hr>
+        <p>Posted on : <b>{{post.date_time.date()}}</b></p>
+        <p>Time: <b>{{post.date_time.time()}}</b></p>
+    </div>
+    <br><br>
+    {%endfor%}
+    <br><br><br><br><br><br><br><br><br><br><br><br><br>
+    <br><br><br>
+
+    <footer class="bg-dark text-center text-lg-start ">
+        <!-- Copyright -->
+        <div class="text-center p-3" style="background-color: rgba(0, 0, 0, 0.2); color:white">
+            © 2021 Copyright:
+            <a class="text-light" href="https://www.raghuinstech.com/">Raghu Institute of Technology</a>
+        </div>
+        <!-- Copyright -->
+    </footer>
+
+    <!-- Optional JavaScript; choose one of the two! -->
+
+    <!-- Option 1: jQuery and Bootstrap Bundle (includes Popper) -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"
+        integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-ho+j7jyWK8fNQe+A12Hb8AhRq26LrZ/JpcUGGOn+Y7RsweNrtN/tE3MoK7ZeZDyx"
+        crossorigin="anonymous"></script>
+
+    <!-- Option 2: jQuery, Popper.js, and Bootstrap JS
+      <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js" integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj" crossorigin="anonymous"></script>
+      <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js" integrity="sha384-9/reFTGAW83EW2RDu2S0VKaIzap3H66lZH81PoYlFhbGU+6BZp6G7niu735Sk7lN" crossorigin="anonymous"></script>
+      <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.min.js" integrity="sha384-w1Q4orYjBQndcko6MimVbzY0tgp4pWB4lZ7lr30WKz0vr/aWKhXdBNmNb5D92v7s" crossorigin="anonymous"></script>
+      -->
+    <!-- <script src="url_for('static',filename='demo.js')"></script> -->
+</body>
+<style>
+    span {
+        font-family: 'Franklin Gothic Medium', 'Arial Narrow', Arial, sans-serif;
+    }
+
+    body {
+        background-color: rgb(240, 238, 238);
+        color: black;
+    }
+
+    .fixed {
+        position: fixed;
+        width: 100%;
+    }
+
+    table,
+    th,
+    td {
+        border: 2px solid grey;
+        border-collapse: collapse;
+    }
+</style>
+
+</html>
+
+-----------------------------------------------------------------------------------------------------
+
+Filename: members.html
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/css/bootstrap.min.css"
+        integrity="sha384-TX8t27EcRE3e/ihU7zmQxVncDAy5uIKz4rEkgIXeMed4M0jlfIDPvg6uqKI2xXr2" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{url_for('static',filename='style.css')}}">
+
+    <title>
+        Members Page
+    </title>
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-md navbar-dark bg-dark">
+        <a class="navbar-brand" href="{{url_for('home_page')}}"><span>RIT AlumniPortal</span></a>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            {% if current_user.is_authenticated%}
+
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('feed_page')}}"><img
+                            src="{{url_for('static',filename='download.png')}}" height="15px" width="15px" alt="">
+                        Feed</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('members_page')}}"><img
+                            src="{{url_for('static',filename='icon-members-login.png')}}" height="15px" width="15px"
+                            alt="">Members</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" style="color:white">{{current_user.name}}</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('logout_page')}}"><img
+                            src="{{url_for('static',filename='shut-down-icon-22.jpg')}}" height="15px" width="15px"
+                            alt=""> Logout</a>
+                </li>
+            </ul>
+            {% else%}
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('login')}}"><img
+                            src="https://oferrtest.shaktioffice.in/Content/Login/img/login-w-icon.png" height="15px"
+                            width="15px" alt="" />
+                        Login</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('register_page')}}"><img class="invert"
+                            src="{{url_for('static',filename='PngItem_3204574.png')}}" height="15px" width="15px">
+                        Register</a>
+                </li>
+            </ul>
+            {% endif%}
+        </div>
+    </nav>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="alert alert-{{ category }} container" role="alert">
+        <button type="button" class="close m1-2 mb-1" data-dismiss="alert" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+        {{ message }}
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+    <br>
+    <h1 class="container" align="center"><b>Members Page</b></h1>
+    <br><br>
+    <table class="table table-hover table-light table-striped">
+        <thead>
+            <tr>
+                <!-- Your Columns HERE -->
+                <!-- <th scope="col"><u>S.No</u></th> -->
+                <th scope="col"><u>Name</u></th>
+                <th scope="col"><u>Email</u></th>
+                <th scope="col"><u>D.O.B</u></th>
+                <th scope="col"><u>Address</u></th>
+                <th scope="col"><u>Roll No</u></th>
+                <th scope="col"><u>Branch</u></th>
+                <th scope="col"><u>PassedOutYear</u>
+                <th scope="col"><u>Phone No</u></th>
+                <th scope="col"><u>Workplace</u></th>
+                <th scope="col"><u>Posts</u></th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Your rows inside the table HERE: -->
+            {% for user in users %}
+            <tr>
+                <!-- <td>{{user.id}}</td> -->
+                <td>{{user.name}}</td>
+                <td>{{user.email}}</td>
+                <td>{{user.dob}}</td>
+                <td>{{user.address}}</td>
+                <td>{{user.roll_no}}</td>
+                <td>{{user.branch}}</td>
+                <td>{{user.passed_out_year}}</td>
+                <td>{{user.phone}}</td>
+                <td>{{user.current_job}}</td>
+                <!-- <td>
+                <form action="/posts" name='post'>
+                    <input type="text" hidden value="{{user.id}}" name='user_id'>
+                    <button type="submit" class="btn btn-info btn-sm" data-toggle="modal" data-target="#myModal"
+                        id='postb'>POSTS</button>
+                </form>
+            </td> -->
+                <td>
+                    <form method="POST">
+                        <input type="number" id="user_id" name="user_id" value={{user.id}} style="display:none">
+                        <input type="submit" class="btn btn-success" value="POSTS">
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    <div id="myModal" class="modal" role="dialog" style="background-color:rgb(224, 221, 221)">
+        <div class="modal-dialog">
+
+            <!-- Modal content-->
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h4 class="modal-title">Posts Uploaded</h4>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span
+                            aria-hidden="true">&times;</span></button>
+                </div>
+                <div class="modal-body">
+                    {% for post in posts%}
+                    <div class="container" style="border:2px solid black; padding:10px; border-radius:5px">
+                        <p>Posted by: <b>{{post.name}}</b></p>
+                        <hr>
+                        <p style="font-size:25px;"> {{post.post}}</p>
+                        <hr>
+                        <p>Posted on : <b>{{post.date_time}}</b></p>
+                    </div>
+                    <br><br>
+                    {%endfor%}
+                    <!-- <p id='modalid'></p> -->
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <br><br><br>
+
+    <footer class="bg-dark text-center text-lg-start ">
+        <!-- Copyright -->
+        <div class="text-center p-3" style="background-color: rgba(0, 0, 0, 0.2); color:white">
+            © 2021 Copyright:
+            <a class="text-light" href="https://www.raghuinstech.com/">Raghu Institute of Technology</a>
+        </div>
+        <!-- Copyright -->
+    </footer>
+
+    <!-- Optional JavaScript; choose one of the two! -->
+
+    <!-- Option 1: jQuery and Bootstrap Bundle (includes Popper) -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"
+        integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-ho+j7jyWK8fNQe+A12Hb8AhRq26LrZ/JpcUGGOn+Y7RsweNrtN/tE3MoK7ZeZDyx"
+        crossorigin="anonymous"></script>
+
+    <!-- Option 2: jQuery, Popper.js, and Bootstrap JS
+  <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js" integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js" integrity="sha384-9/reFTGAW83EW2RDu2S0VKaIzap3H66lZH81PoYlFhbGU+6BZp6G7niu735Sk7lN" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.min.js" integrity="sha384-w1Q4orYjBQndcko6MimVbzY0tgp4pWB4lZ7lr30WKz0vr/aWKhXdBNmNb5D92v7s" crossorigin="anonymous"></script>
+  -->
+    <!-- <script src="url_for('static',filename='demo.js')"></script> -->
+</body>
+<style>
+    span {
+        font-family: 'Franklin Gothic Medium', 'Arial Narrow', Arial, sans-serif;
+    }
+
+    body {
+        background-color: rgb(240, 238, 238);
+        color: black;
+    }
+
+    .fixed {
+        position: fixed;
+        width: 100%;
+    }
+
+    table,
+    th,
+    td {
+        border: 2px solid grey;
+        border-collapse: collapse;
+    }
+</style>
+
+</html>
+
+-------------------------------------------------------------------------------------------
+
+
+Filename: login_2fa.html
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/css/bootstrap.min.css"
+        integrity="sha384-TX8t27EcRE3e/ihU7zmQxVncDAy5uIKz4rEkgIXeMed4M0jlfIDPvg6uqKI2xXr2" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{url_for('static',filename='style.css')}}">
+
+    <title>
+        Authentication Page
+    </title>
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-md navbar-dark bg-dark">
+        <a class="navbar-brand" href="{{url_for('home_page')}}"><span>RIT AlumniPortal</span></a>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            {% if current_user.is_authenticated%}
+
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('feed_page')}}"><img
+                            src="{{url_for('static',filename='download.png')}}" height="15px" width="15px" alt="">
+                        Feed</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('members_page')}}"><img
+                            src="{{url_for('static',filename='icon-members-login.png')}}" height="15px" width="15px"
+                            alt="">Members</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" style="color:white">{{current_user.name}}</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('logout_page')}}"><img
+                            src="{{url_for('static',filename='shut-down-icon-22.jpg')}}" height="15px" width="15px"
+                            alt=""> Logout</a>
+                </li>
+            </ul>
+            {% else%}
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('login')}}"><img
+                            src="https://oferrtest.shaktioffice.in/Content/Login/img/login-w-icon.png" height="15px"
+                            width="15px" alt="" />
+                        Login</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('register_page')}}"><img class="invert"
+                            src="{{url_for('static',filename='PngItem_3204574.png')}}" height="15px" width="15px">
+                        Register</a>
+                </li>
+            </ul>
+            {% endif%}
+        </div>
+    </nav>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="alert alert-{{ category }} container" role="alert">
+        <button type="button" class="close m1-2 mb-1" data-dismiss="alert" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+        {{ message }}
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+    <br><br><br>
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-lg-12">
+                <div class="jumbotron text-center p-4" style="background-color:rgb(127, 191, 207);">
+                    <h2>Two factor authentication</h2>
+                    <h4>Setup and Authenticate 2FA</h4>
+                </div>
+            </div>
+            <div class="col-lg-5">
+                <form>
+                    <div>
+                        <h5>Instructions!</h5>
+                        <ul>
+                            <li>Download <a
+                                    href="https://play.google.com/store/apps/details?id=com.google.android.apps.authenticator2&hl=en&gl=US"
+                                    target="_blank">Google Authenticator</a> on your mobile.</li>
+                            <li>Create a new account with <strong>setup key</strong> method.</li>
+                            <li>Provide the required details (name, secret key).</li>
+                            <li>Select time-based authentication.</li>
+                            <li>Submit the generated key in the form.</li>
+                        </ul>
+                    </div>
+                    <div class="form-group">
+                        <label for="secret">Secret Token</label>
+                        <input type="text" class="form-control" id="secret" value="{{ secret }}" readonly>
+                    </div>
+                    <div class="text-center">
+                        <button type="button" class="btn btn-primary" onclick="copySecret()">Copy Secret</button>
+                    </div>
+                </form>
+            </div>
+            <div class="col-lg-7">
+
+                <form method="POST" action='/login_2fa'>
+                    <div class="form-group">
+                        <label for="otp">Generated OTP</label>
+                        <input type="hidden" name="secret" value="{{ secret }}" required>
+                        <input type="number" class="form-control" id="otp" name="otp" required>
+                    </div>
+                    <div class="text-center">
+                        <button type="submit" class="btn btn-primary">Authenticate User</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function copySecret() {
+            /* Get the text field */
+            var copyText = document.getElementById("secret");
+
+            /* Select the text field */
+            copyText.select();
+            copyText.setSelectionRange(0, 99999); /*For mobile devices*/
+
+            /* Copy the text inside the text field */
+            document.execCommand("copy");
+
+            alert("Successfully copied TOTP secret token!");
+        }
+    </script>
+    <br><br><br>
+
+    <footer class="bg-dark text-center text-lg-start ">
+        <!-- Copyright -->
+        <div class="text-center p-3" style="background-color: rgba(0, 0, 0, 0.2); color:white">
+            © 2021 Copyright:
+            <a class="text-light" href="https://www.raghuinstech.com/">Raghu Institute of Technology</a>
+        </div>
+        <!-- Copyright -->
+    </footer>
+
+    <!-- Optional JavaScript; choose one of the two! -->
+
+    <!-- Option 1: jQuery and Bootstrap Bundle (includes Popper) -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"
+        integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-ho+j7jyWK8fNQe+A12Hb8AhRq26LrZ/JpcUGGOn+Y7RsweNrtN/tE3MoK7ZeZDyx"
+        crossorigin="anonymous"></script>
+
+    <!-- Option 2: jQuery, Popper.js, and Bootstrap JS
+  <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js" integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js" integrity="sha384-9/reFTGAW83EW2RDu2S0VKaIzap3H66lZH81PoYlFhbGU+6BZp6G7niu735Sk7lN" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.min.js" integrity="sha384-w1Q4orYjBQndcko6MimVbzY0tgp4pWB4lZ7lr30WKz0vr/aWKhXdBNmNb5D92v7s" crossorigin="anonymous"></script>
+  -->
+    <!-- <script src="url_for('static',filename='demo.js')"></script> -->
+</body>
+<style>
+    span {
+        font-family: 'Franklin Gothic Medium', 'Arial Narrow', Arial, sans-serif;
+    }
+
+    body {
+        background-color: rgb(240, 238, 238);
+        color: black;
+    }
+
+    .fixed {
+        position: fixed;
+        width: 100%;
+    }
+
+    table,
+    th,
+    td {
+        border: 2px solid grey;
+        border-collapse: collapse;
+    }
+</style>
+
+</html>
+
+----------------------------------------------------------------------------------------------------
+
+
+Filename: uposts.html
+
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/css/bootstrap.min.css"
+        integrity="sha384-TX8t27EcRE3e/ihU7zmQxVncDAy5uIKz4rEkgIXeMed4M0jlfIDPvg6uqKI2xXr2" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{url_for('static',filename='style.css')}}">
+
+    <title>
+        User Posts
+    </title>
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-md navbar-dark bg-dark">
+        <a class="navbar-brand" href="{{url_for('home_page')}}"><span>RIT AlumniPortal</span></a>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            {% if current_user.is_authenticated%}
+
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('feed_page')}}"><img
+                            src="{{url_for('static',filename='download.png')}}" height="15px" width="15px" alt="">
+                        Feed</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('members_page')}}"><img
+                            src="{{url_for('static',filename='icon-members-login.png')}}" height="15px" width="15px"
+                            alt="">Members</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" style="color:white">{{current_user.name}}</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('logout_page')}}"><img
+                            src="{{url_for('static',filename='shut-down-icon-22.jpg')}}" height="15px" width="15px"
+                            alt=""> Logout</a>
+                </li>
+            </ul>
+            {% else%}
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('home_page')}}"><img
+                            src="{{url_for('static',filename='home-7-48.png')}}" height="15px" width="15px" alt="">
+                        Home <span class="sr-only">(current)</span></a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('about_page')}}"><img
+                            src="{{url_for('static',filename='info-16.png')}}" height="15px" width="15px" alt=""> About
+                        Us</a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{url_for('login')}}"><img
+                            src="https://oferrtest.shaktioffice.in/Content/Login/img/login-w-icon.png" height="15px"
+                            width="15px" alt="" />
+                        Login</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link " href="{{url_for('register_page')}}"><img class="invert"
+                            src="{{url_for('static',filename='PngItem_3204574.png')}}" height="15px" width="15px">
+                        Register</a>
+                </li>
+            </ul>
+            {% endif%}
+        </div>
+    </nav>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="alert alert-{{ category }} container" role="alert">
+        <button type="button" class="close m1-2 mb-1" data-dismiss="alert" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+        {{ message }}
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+    <br>
+    <h1 class="container" align="center" style="font-family:'Times New Roman', Times, serif;">{{user.name}}</h1>
+    <div class="container register" align="center" margin="500px" style="background-color:white">
+        <br>
+        <h2 style="color:black">Student Details</h2>
+        <br>
+        <p>Name: <span>{{user.name}}</span>
+        <p>Email: <span>{{user.email}}</span>
+        <p>Date of Birth: <span>{{user.dob}}</span>
+        <p>Roll Number: <span>{{user.roll_no}}</span>
+        <p>Branch: <span>{{user.branch}}</span>
+        <p>Passed out year: <span>{{user.passed_out_year}}</span>
+        <p>Phone Number: <span>{{user.phone}}</span>
+        <p>Address: <span>{{user.address}}</span>
+        <p>Workplace: <span>{{user.current_job}}</span>
+            <br>
+    </div>
+    <br>
+    <h2 class="container" align="center" style="font-family:'Times New Roman', Times, serif;">Posts uploaded by
+        {{user.name}}</h2>
+    {% for post in posts%}
+    <br><br>
+    <div class="container" style="border:2px solid white; padding:10px; border-radius:5px;background-color:white">
+        <p>Posted by: <b>{{post.name}}</b></p>
+        <p>E-mail: <b>{{post.email}}</b></p>
+
+        <hr>
+        <p style="font-size:25px;"> {{post.post}}</p>
+        <hr>
+        <p>Posted on : <b>{{post.date_time.date()}}</b></p>
+        <p>Time: <b>{{post.date_time.time()}}</b></p>
+    </div>
+    <br>
+    {%endfor%}
+    <br><br><br>
+
+    <footer class="bg-dark text-center text-lg-start ">
+        <!-- Copyright -->
+        <div class="text-center p-3" style="background-color: rgba(0, 0, 0, 0.2); color:white">
+            © 2021 Copyright:
+            <a class="text-light" href="https://www.raghuinstech.com/">Raghu Institute of Technology</a>
+        </div>
+        <!-- Copyright -->
+    </footer>
+
+    <!-- Optional JavaScript; choose one of the two! -->
+
+    <!-- Option 1: jQuery and Bootstrap Bundle (includes Popper) -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"
+        integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-ho+j7jyWK8fNQe+A12Hb8AhRq26LrZ/JpcUGGOn+Y7RsweNrtN/tE3MoK7ZeZDyx"
+        crossorigin="anonymous"></script>
+
+    <!-- Option 2: jQuery, Popper.js, and Bootstrap JS
+  <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js" integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js" integrity="sha384-9/reFTGAW83EW2RDu2S0VKaIzap3H66lZH81PoYlFhbGU+6BZp6G7niu735Sk7lN" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.min.js" integrity="sha384-w1Q4orYjBQndcko6MimVbzY0tgp4pWB4lZ7lr30WKz0vr/aWKhXdBNmNb5D92v7s" crossorigin="anonymous"></script>
+  -->
+    <!-- <script src="url_for('static',filename='demo.js')"></script> -->
+</body>
+<style>
+    .register p {
+        /* font-family: 'Franklin Gothic Medium', 'Arial Narrow', Arial, sans-serif; */
+        color: black;
+        text-align: left;
+        margin: 0px 30px;
+        padding: 10px;
+        display: inline-block;
+    }
+
+    body {
+        background-color: rgb(240, 238, 238);
+        color: black;
+    }
+
+    .fixed {
+        position: fixed;
+        width: 100%;
+    }
+
+    table,
+    th,
+    td {
+        border: 2px solid grey;
+        border-collapse: collapse;
+    }
+
+    span {
+        display: inline;
+        text-align: center;
+        font-weight: bold
+    }
+</style>
+
+</html>
+
+-----------------------------------------------------------------------------------------------------
+
+Filename: style.css
+
+
+
+/* .registerl{
+    display: inline;
+    width: 20%;
+    border: 2px solid red;
+} */
+.register label{
+    width: 25%;
+    /* margin-bottom: 3rem;
+    margin-top:3rem; */
+    margin:20px auto;
+    text-align:left;
+    font-size: 1.2rem;
+    color: black
+}
+.register{
+    color: white;
+    text-align: center;
+    border:5px solid black;
+    border-radius:15px;
+    padding: 20px;
+}
+/* .flex{
+    display:flex;
+    flex-direction:row;
+} */
+.register input{
+    display: inline-block;
+    width:40%;
+    height:40px;
+    padding:2px 2px;
+}
+.register select{
+    display: inline-block;
+    width:40%;
+    height:40px;
+    padding:2px 2px;
+}
+.register textarea{
+    display: inline-block;
+    width:40%;
+    height:80px;
+    padding:2px 2px;
+}
+

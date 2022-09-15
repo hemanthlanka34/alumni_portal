@@ -1,0 +1,44 @@
+/* .registerl{
+    display: inline;
+    width: 20%;
+    border: 2px solid red;
+} */
+.register label{
+    width: 25%;
+    /* margin-bottom: 3rem;
+    margin-top:3rem; */
+    margin:20px auto;
+    text-align:left;
+    font-size: 1.2rem;
+    color: black
+}
+.register{
+    color: white;
+    text-align: center;
+    border:5px solid black;
+    border-radius:15px;
+    padding: 20px;
+}
+/* .flex{
+    display:flex;
+    flex-direction:row;
+} */
+.register input{
+    display: inline-block;
+    width:40%;
+    height:40px;
+    padding:2px 2px;
+}
+.register select{
+    display: inline-block;
+    width:40%;
+    height:40px;
+    padding:2px 2px;
+}
+.register textarea{
+    display: inline-block;
+    width:40%;
+    height:80px;
+    padding:2px 2px;
+}
+
